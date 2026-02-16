@@ -19,6 +19,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://0.0.0.0:8080",
         os.getenv("FRONTEND_URL"),  # Railway env variable
     ],
     allow_credentials=True,
