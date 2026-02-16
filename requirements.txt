@@ -1,2 +1,16 @@
 fastapi
 appwrite 
+dotenv
+python-dotenv
+jose
+passlib
+bcrypt  
+datetime
+routes
+schemas
+models
+pydantic
+uvicorn
+cors
+corsheaders
+
