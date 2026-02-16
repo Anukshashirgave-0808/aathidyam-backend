@@ -13,4 +13,5 @@ pydantic
 uvicorn
 cors
 corsheaders
+base64
 
