@@ -12,7 +12,6 @@ from routes.orders import router as orders_router
 
 app = FastAPI(title="Segmento Backend")
 
-# ✅ Explicit CORS allowlist (production safe)
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -28,11 +27,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(auth_router, prefix="/auth", tags=["Auth"])
-app.include_router(current_user_router, prefix="/user", tags=["User"])
-app.include_router(profile_router, prefix="/profile", tags=["Profile"])
-app.include_router(orders_router, prefix="/orders", tags=["Orders"])
+# ✅ Routers (NO duplicate prefix)
+app.include_router(auth_router)
+app.include_router(current_user_router)
+app.include_router(profile_router)
+app.include_router(orders_router)
 
 @app.get("/")
 def root():
