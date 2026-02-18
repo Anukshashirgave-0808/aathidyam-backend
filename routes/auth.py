@@ -93,10 +93,13 @@ def login_user(data: LoginRequest):
             }
         )
 
-    # ✅ Token uses userId ONLY
+    # ✅ ADD ONLY THIS (role support)
+    role = user.get("role", "user")
+
     token = create_access_token({
         "userId": user["$id"],
-        "email": user["email"]
+        "email": user["email"],
+        "role": role
     })
 
     return {
@@ -106,10 +109,10 @@ def login_user(data: LoginRequest):
             "id": user["$id"],
             "name": user["name"],
             "email": user["email"],
-            "mobile": user["mobile"]
+            "mobile": user["mobile"],
+            "role": role
         }
     }
-
 
 # ================= MY ORDERS =================
 
