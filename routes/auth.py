@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr
 from appwrite_client import databases
 from appwrite.query import Query
 from utils.jwt import create_access_token, decode_access_token
-import os, uuid, re
+import os, uuid
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -16,8 +16,8 @@ ORDERS_COLLECTION_ID = os.getenv("ORDERS_COLLECTION_ID")
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
-    mobile: str
     password: str
+    mobile: str | None = None   # ✅ mobile optional
 
 
 @router.post("/register")
@@ -42,7 +42,8 @@ def register_user(data: RegisterRequest):
             "name": data.name,
             "email": data.email,
             "mobile": data.mobile,
-            "passwordHash": data.password  # ⚠️ hash later
+            "passwordHash": data.password,
+            "role": None        # ✅ users default to NULL
         }
     )
 
@@ -69,10 +70,10 @@ def login_user(data: LoginRequest):
 
     user = users["documents"][0]
 
-    if user["passwordHash"] != data.password:
+    if user.get("passwordHash") != data.password:
         raise HTTPException(401, "Invalid password")
 
-    # 🔥 Attach guest orders to this user
+    # 🔥 Attach guest orders
     guest_orders = databases.list_documents(
         DATABASE_ID,
         ORDERS_COLLECTION_ID,
@@ -93,12 +94,13 @@ def login_user(data: LoginRequest):
             }
         )
 
-    # ✅ ADD ONLY THIS (role support)
-    role = user.get("role", "user")
+    # ✅ CRITICAL FIX
+    # role NULL => user
+    role = user.get("role") or "user"
 
     token = create_access_token({
         "userId": user["$id"],
-        "email": user["email"],
+        "email": user.get("email"),
         "role": role
     })
 
@@ -107,38 +109,34 @@ def login_user(data: LoginRequest):
         "token": token,
         "user": {
             "id": user["$id"],
-            "name": user["name"],
-            "email": user["email"],
-            "mobile": user["mobile"],
+            "name": user.get("name"),
+            "email": user.get("email"),
+            "mobile": user.get("mobile"),  # ✅ safe
             "role": role
         }
     }
+
 
 # ================= MY ORDERS =================
 
 @router.get("/my-orders")
 def get_my_orders(token: str):
-    try:
-        payload = decode_access_token(token)
-        user_id = payload.get("userId")
+    payload = decode_access_token(token)
+    user_id = payload.get("userId")
 
-        if not user_id:
-            raise HTTPException(401, "Invalid token")
+    if not user_id:
+        raise HTTPException(401, "Invalid token")
 
-        orders = databases.list_documents(
-            DATABASE_ID,
-            ORDERS_COLLECTION_ID,
-            queries=[
-                Query.equal("userId", user_id),
-                Query.order_desc("$createdAt")
-            ]
-        )
+    orders = databases.list_documents(
+        DATABASE_ID,
+        ORDERS_COLLECTION_ID,
+        queries=[
+            Query.equal("userId", user_id),
+            Query.order_desc("$createdAt")
+        ]
+    )
 
-        return {
-            "success": True,
-            "orders": orders["documents"]
-        }
-
-    except Exception as e:
-        print("❌ MY ORDERS ERROR:", repr(e))
-        raise HTTPException(500, "Internal Server Error")
+    return {
+        "success": True,
+        "orders": orders["documents"]
+    }
