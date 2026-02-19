@@ -3,6 +3,7 @@ from pydantic import BaseModel, EmailStr
 from appwrite_client import databases
 from appwrite.query import Query
 from utils.jwt import create_access_token, decode_access_token
+from passlib.context import CryptContext
 import os, uuid
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -11,7 +12,17 @@ DATABASE_ID = os.getenv("DATABASE_ID")
 USERS_COLLECTION_ID = os.getenv("USERS_COLLECTION_ID")
 ORDERS_COLLECTION_ID = os.getenv("ORDERS_COLLECTION_ID")
 
-# ================= REGISTER =================
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# ================= HELPERS =================
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hash: str) -> bool:
+    return pwd_context.verify(password, hash)
+
+# ================= REQUEST MODELS =================
 
 class RegisterRequest(BaseModel):
     name: str
@@ -20,17 +31,22 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+    loginType: str = "user"   # "user" | "admin"
+
+# ================= REGISTER =================
+
 @router.post("/register")
 def register_user(data: RegisterRequest):
-    email = data.email.strip().lower()
-
-    users = databases.list_documents(
+    existing = databases.list_documents(
         DATABASE_ID,
         USERS_COLLECTION_ID,
-        queries=[Query.equal("email", email)]
+        queries=[Query.equal("email", data.email)]
     )
 
-    if users["total"] > 0:
+    if existing["total"] > 0:
         raise HTTPException(400, "User already exists")
 
     if len(data.password) < 8:
@@ -42,59 +58,49 @@ def register_user(data: RegisterRequest):
         document_id=str(uuid.uuid4()),
         data={
             "name": data.name,
-            "email": email,
+            "email": data.email,
             "mobile": data.mobile,
-            "passwordHash": data.password,  # ⚠️ hash later
-            "role": None                   # users default to NULL
+            "passwordHash": hash_password(data.password),
+            "role": "user"   # default role
         }
     )
 
     return {"success": True}
 
-
 # ================= LOGIN =================
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-    loginType: str | None = "user"  # "user" or "admin"
-
 
 @router.post("/login")
 def login_user(data: LoginRequest):
-    email = data.email.strip().lower()
-
     users = databases.list_documents(
         DATABASE_ID,
         USERS_COLLECTION_ID,
-        queries=[Query.equal("email", email)]
+        queries=[Query.equal("email", data.email)]
     )
 
     if users["total"] == 0:
-        raise HTTPException(401, "Invalid credentials")
+        raise HTTPException(404, "User not found")
 
     user = users["documents"][0]
 
-    if user["passwordHash"] != data.password:
-        raise HTTPException(401, "Invalid credentials")
+    if not verify_password(data.password, user["passwordHash"]):
+        raise HTTPException(401, "Invalid email or password")
 
-    # ✅ FINAL ROLE NORMALIZATION (MOST IMPORTANT LINE)
-    raw_role = user.get("role")
-    role = "admin" if raw_role == "admin" else "user"
+    # ✅ SAFE ROLE HANDLING
+    role = user.get("role") or "user"
 
-    # 🔐 BACKEND ADMIN ENFORCEMENT
+    # 🔐 ADMIN LOGIN ENFORCEMENT
     if data.loginType == "admin" and role != "admin":
         raise HTTPException(
             status_code=403,
             detail="Access Denied: You are not an admin"
         )
 
-    # 🔥 Attach guest orders
+    # 🔥 ATTACH GUEST ORDERS
     guest_orders = databases.list_documents(
         DATABASE_ID,
         ORDERS_COLLECTION_ID,
         queries=[
-            Query.equal("email", email),
+            Query.equal("email", data.email),
             Query.equal("isGuest", True)
         ]
     )
@@ -103,16 +109,17 @@ def login_user(data: LoginRequest):
         databases.update_document(
             DATABASE_ID,
             ORDERS_COLLECTION_ID,
-            document_id=order["$id"],
-            data={
+            order["$id"],
+            {
                 "isGuest": False,
                 "userId": user["$id"]
             }
         )
 
+    # 🔑 JWT TOKEN
     token = create_access_token({
         "userId": user["$id"],
-        "email": email,
+        "email": user["email"],
         "role": role
     })
 
@@ -121,13 +128,12 @@ def login_user(data: LoginRequest):
         "token": token,
         "user": {
             "id": user["$id"],
-            "name": user.get("name"),
-            "email": email,
-            "mobile": user.get("mobile"),
+            "name": user["name"],
+            "email": user["email"],
+            "mobile": user["mobile"],
             "role": role
         }
     }
-
 
 # ================= MY ORDERS =================
 
@@ -149,11 +155,7 @@ def get_my_orders(token: str):
             ]
         )
 
-        return {
-            "success": True,
-            "orders": orders["documents"]
-        }
+        return {"success": True, "orders": orders["documents"]}
 
-    except Exception as e:
-        print("❌ MY ORDERS ERROR:", e)
-        raise HTTPException(500, "Internal Server Error")
+    except Exception:
+        raise HTTPException(401, "Invalid or expired token")
