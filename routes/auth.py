@@ -3,7 +3,7 @@ from pydantic import BaseModel, EmailStr
 from appwrite_client import databases
 from appwrite.query import Query
 from utils.jwt import create_access_token, decode_access_token
-import os, uuid, re
+import os, uuid
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -22,10 +22,12 @@ class RegisterRequest(BaseModel):
 
 @router.post("/register")
 def register_user(data: RegisterRequest):
+    email = data.email.strip().lower()
+
     users = databases.list_documents(
         DATABASE_ID,
         USERS_COLLECTION_ID,
-        queries=[Query.equal("email", data.email)]
+        queries=[Query.equal("email", email)]
     )
 
     if users["total"] > 0:
@@ -40,9 +42,10 @@ def register_user(data: RegisterRequest):
         document_id=str(uuid.uuid4()),
         data={
             "name": data.name,
-            "email": data.email,
+            "email": email,
             "mobile": data.mobile,
-            "passwordHash": data.password  # ⚠️ hash later
+            "passwordHash": data.password,  # ⚠️ hash later
+            "role": None                   # users default to NULL
         }
     )
 
@@ -54,30 +57,44 @@ def register_user(data: RegisterRequest):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    loginType: str | None = "user"  # "user" or "admin"
 
 
 @router.post("/login")
 def login_user(data: LoginRequest):
+    email = data.email.strip().lower()
+
     users = databases.list_documents(
         DATABASE_ID,
         USERS_COLLECTION_ID,
-        queries=[Query.equal("email", data.email)]
+        queries=[Query.equal("email", email)]
     )
 
     if users["total"] == 0:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(401, "Invalid credentials")
 
     user = users["documents"][0]
 
     if user["passwordHash"] != data.password:
-        raise HTTPException(401, "Invalid password")
+        raise HTTPException(401, "Invalid credentials")
 
-    # 🔥 Attach guest orders to this user
+    # ✅ FINAL ROLE NORMALIZATION (MOST IMPORTANT LINE)
+    raw_role = user.get("role")
+    role = "admin" if raw_role == "admin" else "user"
+
+    # 🔐 BACKEND ADMIN ENFORCEMENT
+    if data.loginType == "admin" and role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: You are not an admin"
+        )
+
+    # 🔥 Attach guest orders
     guest_orders = databases.list_documents(
         DATABASE_ID,
         ORDERS_COLLECTION_ID,
         queries=[
-            Query.equal("email", data.email),
+            Query.equal("email", email),
             Query.equal("isGuest", True)
         ]
     )
@@ -93,12 +110,9 @@ def login_user(data: LoginRequest):
             }
         )
 
-    # ✅ ADD ONLY THIS (role support)
-    role = user.get("role", "user")
-
     token = create_access_token({
         "userId": user["$id"],
-        "email": user["email"],
+        "email": email,
         "role": role
     })
 
@@ -107,12 +121,13 @@ def login_user(data: LoginRequest):
         "token": token,
         "user": {
             "id": user["$id"],
-            "name": user["name"],
-            "email": user["email"],
-            "mobile": user["mobile"],
+            "name": user.get("name"),
+            "email": email,
+            "mobile": user.get("mobile"),
             "role": role
         }
     }
+
 
 # ================= MY ORDERS =================
 
@@ -140,5 +155,5 @@ def get_my_orders(token: str):
         }
 
     except Exception as e:
-        print("❌ MY ORDERS ERROR:", repr(e))
+        print("❌ MY ORDERS ERROR:", e)
         raise HTTPException(500, "Internal Server Error")
