@@ -27,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ✅ Routers (NO duplicate prefix)
 app.include_router(auth_router)
 app.include_router(current_user_router)

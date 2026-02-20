@@ -7,18 +7,27 @@ import os, uuid
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
+# ================= ENV =================
+
 DATABASE_ID = os.getenv("DATABASE_ID")
 USERS_COLLECTION_ID = os.getenv("USERS_COLLECTION_ID")
 ORDERS_COLLECTION_ID = os.getenv("ORDERS_COLLECTION_ID")
 
-# ================= REGISTER =================
+# ================= MODELS =================
 
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
-    mobile: str | None = None   # ✅ mobile optional
+    mobile: str | None = None
 
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+# ================= REGISTER =================
 
 @router.post("/register")
 def register_user(data: RegisterRequest):
@@ -42,20 +51,15 @@ def register_user(data: RegisterRequest):
             "name": data.name,
             "email": data.email,
             "mobile": data.mobile,
-            "passwordHash": data.password,
-            "role": None        # ✅ users default to NULL
+            "passwordHash": data.password,   # ⚠️ later replace with bcrypt
+            "role": None                     # default user
         }
     )
 
-    return {"success": True}
+    return {"success": True, "message": "User registered successfully"}
 
 
 # ================= LOGIN =================
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
 
 @router.post("/login")
 def login_user(data: LoginRequest):
@@ -70,10 +74,18 @@ def login_user(data: LoginRequest):
 
     user = users["documents"][0]
 
+    # ❌ Password check
     if user.get("passwordHash") != data.password:
         raise HTTPException(401, "Invalid password")
 
-    # 🔥 Attach guest orders
+    # ================= ROLE FIX =================
+    role = user.get("role")
+
+    # Only allow exact roles
+    if role not in ["admin", "user"]:
+        role = "user"
+
+    # ================= ATTACH GUEST ORDERS =================
     guest_orders = databases.list_documents(
         DATABASE_ID,
         ORDERS_COLLECTION_ID,
@@ -94,10 +106,7 @@ def login_user(data: LoginRequest):
             }
         )
 
-    # ✅ CRITICAL FIX
-    # role NULL => user
-    role = user.get("role") or "user"
-
+    # ================= TOKEN =================
     token = create_access_token({
         "userId": user["$id"],
         "email": user.get("email"),
@@ -111,7 +120,7 @@ def login_user(data: LoginRequest):
             "id": user["$id"],
             "name": user.get("name"),
             "email": user.get("email"),
-            "mobile": user.get("mobile"),  # ✅ safe
+            "mobile": user.get("mobile"),
             "role": role
         }
     }
@@ -122,8 +131,8 @@ def login_user(data: LoginRequest):
 @router.get("/my-orders")
 def get_my_orders(token: str):
     payload = decode_access_token(token)
-    user_id = payload.get("userId")
 
+    user_id = payload.get("userId")
     if not user_id:
         raise HTTPException(401, "Invalid token")
 
