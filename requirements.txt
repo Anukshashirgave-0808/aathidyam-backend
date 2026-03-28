@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+appwrite==16.0.0
+python-dotenv
+python-jose
+passlib[bcrypt]
+bcrypt
+pydantic[email]
